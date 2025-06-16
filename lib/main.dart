@@ -238,18 +238,32 @@ class _ResultPageState extends State<ResultPage> {
   Color alertaColor = Colors.transparent;
   bool showAlerta = false;
   bool connectionError = false;
-  double _maxX = 10.0;
+  //double _maxX = 5.0;
+  //double _minX = 0;
   double _maxY = 2.0;
-  final int _maxDataPoints = 500;
+  final int _maxDataPoints = 50 * 30;
   late WebSocketChannel channel;
   Stream? dataStream;
   Timer? _stopRecordingTimer;
+  double windowSize = 5.0;
+  double windowStart = 0.0; // Inicio de la ventana actual
+  late Timer _windowTimer;
+  bool isLiveWindow = false;
+  double _windowStart = 0;
+  final double _windowSize = 5;
 
   @override
   void dispose() {
     _stopRecordingTimer?.cancel();
     channel?.sink.close();
     super.dispose();
+    @override
+    void dispose() {
+      _windowTimer.cancel();
+      _stopRecordingTimer?.cancel();
+      channel.sink.close();
+      super.dispose();
+    }
   }
 
   void _handleWebSocketMessage(dynamic message) {
@@ -271,8 +285,9 @@ class _ResultPageState extends State<ResultPage> {
     super.initState();
 
     // Abres la conexión WebSocket solo 1 vez
-    channel = WebSocketChannel.connect(Uri.parse('ws://172.20.10.6:8765/ws/flutter'));
-
+    channel = WebSocketChannel.connect(
+      Uri.parse('ws://172.20.10.6:8765/ws/flutter'),
+    );
 
     // Escuchas mensajes siempre que lleguen mientras el widget esté activo
     channel.stream.listen(
@@ -287,11 +302,22 @@ class _ResultPageState extends State<ResultPage> {
         setState(() => connectionError = true);
       },
     );
+    // Timer para avanzar ventana cada 5 segundos
+    _windowTimer = Timer.periodic(Duration(seconds: 5), (_) {
+      setState(() {
+        if (!isLiveWindow) {
+          windowStart += windowSize;
+          if (windowStart >= 10) {
+            isLiveWindow = true; // Pasamos a modo seguimiento en vivo
+          }
+        }
+      });
+    });
   }
 
   void _updateChartData(double tibialY, double braquialY) {
     setState(() {
-      double t = _currentIndex.toDouble() * (1/50);
+      double t = _currentIndex.toDouble() * (1 / 50);
 
       // Añadir nuevos puntos
       tibialData.add(FlSpot(t, tibialY));
@@ -299,8 +325,12 @@ class _ResultPageState extends State<ResultPage> {
       _currentIndex++;
 
       // Ajustar ejes dinámicamente
-      _maxX = min(t,10); // Mostrar 2 segundos más que el último dato
-      _maxY = max(_maxY, max(tibialY, braquialY) + 10); // Margen de 10 unidades
+      //_maxX = t < 5 ? 5 : t; // Mostrar 2 segundos más que el último dato
+      //_minX = max(0, _maxX - 5);
+      _maxY = max(
+        _maxY,
+        max(tibialY, braquialY) + 0.5,
+      ); // Margen de 0.5 unidades
 
       // Limitar datos para mejor rendimiento
       if (tibialData.length > _maxDataPoints) {
@@ -314,9 +344,23 @@ class _ResultPageState extends State<ResultPage> {
         showAlerta = true;
       }
     });
+    if (isLiveWindow) {
+      // En modo vivo maxX = t, minX = 10 (ventana fija que crece con t)
+      windowStart = 10;
+    }
   }
 
   void _startRecording() {
+    // Enviar altura al backend antes de empezar la grabación
+    final alturaTexto = widget.valores['Altura (cm)'];
+    if (alturaTexto != null) {
+      final altura = double.tryParse(alturaTexto);
+      if (altura != null) {
+        channel.sink.add(
+          jsonEncode({'command': 'set_altura', 'altura': altura}),
+        );
+      }
+    }
     if (_recording) return;
 
     setState(() {
@@ -324,18 +368,26 @@ class _ResultPageState extends State<ResultPage> {
       tibialData.clear();
       braquialData.clear();
       _currentIndex = 0;
-      _maxX = 0;
-      _maxY = 2.0;
+      //_maxX = 5;
+      _maxY = 0;
       alertaColor = Colors.transparent;
       showAlerta = false;
       connectionError = false;
+      _windowStart = 0;
     });
 
     // Envías start para que el servidor comience a enviar datos
     channel.sink.add('start');
 
+    // Reiniciás el timer de ventana
+    _windowTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      setState(() {
+        _windowStart += _windowSize;
+      });
+    });
+
     // Timer para detener la grabación después de 10 segundos
-    _stopRecordingTimer = Timer(const Duration(seconds: 10), () {
+    _stopRecordingTimer = Timer(const Duration(seconds: 30), () {
       _stopRecording();
     });
   }
@@ -345,6 +397,10 @@ class _ResultPageState extends State<ResultPage> {
 
     // Envías stop para detener la simulación en el servidor
     channel.sink.add('stop');
+
+    // Cancelás timers
+    _windowTimer.cancel();
+    _stopRecordingTimer?.cancel();
 
     setState(() {
       _recording = false;
@@ -366,6 +422,19 @@ class _ResultPageState extends State<ResultPage> {
     final altura = widget.valores['Altura (cm)'] ?? '';
     final lT = widget.valores['Segmento Hombro a Tobillo (cm)'] ?? '';
     final lB = widget.valores['Segmento Braquial (cm)'] ?? '';
+    final double minX = _windowStart;
+    final double maxX = _windowStart + _windowSize;
+
+
+    final visibleTibialData =
+        tibialData
+            .where((point) => point.x >= minX && point.x <= maxX)
+            .toList();
+
+    final visibleBraquialData =
+        braquialData
+            .where((point) => point.x >= minX && point.x <= maxX)
+            .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -411,8 +480,9 @@ class _ResultPageState extends State<ResultPage> {
                           padding: const EdgeInsets.all(8.0),
                           child: LineChart(
                             LineChartData(
-                              minX: _maxX - 10,
-                              maxX: _maxX,
+                              minX: minX,
+                              maxX: maxX,
+
                               minY: 0,
                               maxY: _maxY,
                               titlesData: FlTitlesData(
@@ -463,8 +533,8 @@ class _ResultPageState extends State<ResultPage> {
                                   sideTitles: SideTitles(
                                     showTitles: false,
                                     reservedSize: baseFontSize * 2.5,
-                                    interval:
-                                        max(1, _maxY / 5).roundToDouble(),
+                                    interval: 0.5,
+                                    // max(5, _maxY / 5).roundToDouble(),
                                     getTitlesWidget:
                                         (value, meta) => Text(
                                           '${value.toInt()}',
@@ -491,7 +561,7 @@ class _ResultPageState extends State<ResultPage> {
                               ),
                               lineBarsData: [
                                 LineChartBarData(
-                                  spots: tibialData,
+                                  spots: visibleTibialData,
                                   isCurved: true,
                                   color: Colors.red,
                                   barWidth: 2,
@@ -504,7 +574,7 @@ class _ResultPageState extends State<ResultPage> {
                                   ),
                                 ),
                                 LineChartBarData(
-                                  spots: braquialData,
+                                  spots: visibleBraquialData,
                                   isCurved: true,
                                   color: Colors.blue,
                                   barWidth: 2,
@@ -517,17 +587,6 @@ class _ResultPageState extends State<ResultPage> {
                                   ),
                                 ),
                               ],
-                              rangeAnnotations: RangeAnnotations(
-                                horizontalRangeAnnotations: [
-                                  HorizontalRangeAnnotation(
-                                    y1: 2,
-                                    y2: _maxY,
-                                    color: Colors.yellow.withAlpha(
-                                      (0.1 * 255).toInt(),
-                                    ),
-                                  ),
-                                ],
-                              ),
                             ),
                           ),
                         ),
@@ -674,7 +733,12 @@ class _ResultPageState extends State<ResultPage> {
                             ),
                             child: Text(
                               'VOP',
-                              style: TextStyle(fontSize: showAlerta ? baseFontSize * 3 : baseFontSize * 6),
+                              style: TextStyle(
+                                fontSize:
+                                    showAlerta
+                                        ? baseFontSize * 3
+                                        : baseFontSize * 6,
+                              ),
                             ),
                           ),
                           Wrap(
@@ -750,7 +814,13 @@ class _ResultPageState extends State<ResultPage> {
                             runSpacing: 10,
                             children: [
                               ElevatedButton(
-                                onPressed: showAlerta ? _clearAlerta : null,
+                                onPressed:
+                                    (_recording || showAlerta)
+                                        ? () {
+                                          if (_recording) _stopRecording();
+                                          if (showAlerta) _clearAlerta();
+                                        }
+                                        : null,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.black,
                                   padding: const EdgeInsets.symmetric(
