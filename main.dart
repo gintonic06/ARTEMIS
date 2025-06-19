@@ -252,6 +252,7 @@ class _ResultPageState extends State<ResultPage> {
   double _windowStart = 0;
   final double _windowSize = 5;
   double? vopMedida;
+  double? freqMedida;
 
   @override
   void dispose() {
@@ -278,6 +279,14 @@ class _ResultPageState extends State<ResultPage> {
         // Recibí el resultado final de VOP
         setState(() {
           vopMedida = data["vop"]?.toDouble();
+           // Ya terminó la grabación y análisis
+        });
+        return;
+      }
+      if (data.containsKey("freq")) {
+        // Recibí el resultado final de Freq
+        setState(() {
+          freqMedida = data["freq"];
           _recording = false; // Ya terminó la grabación y análisis
         });
         return;
@@ -299,7 +308,7 @@ class _ResultPageState extends State<ResultPage> {
     // Escuchas mensajes siempre que lleguen mientras el widget esté activo
     channel.stream.listen(
       (message) {
-        if (!_recording && vopMedida != null) return; // Solo procesa si grabando
+        if (!_recording && vopMedida != null && freqMedida != null) return; // Solo procesa si grabando
         _handleWebSocketMessage(message);
       },
       onError: (error) {
@@ -379,6 +388,7 @@ class _ResultPageState extends State<ResultPage> {
     setState(() {
       _recording = true;
       vopMedida = null;
+      freqMedida = null;
       tibialData.clear();
       braquialData.clear();
       _currentIndex = 0;
@@ -780,8 +790,10 @@ class _ResultPageState extends State<ResultPage> {
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Text(
-                                  'FR',
-                                  style: TextStyle(fontSize: baseFontSize * 4),
+                                  freqMedida != null
+                                  ? '${freqMedida!.toStringAsFixed(0)} bpm'
+                                  : 'FR',
+                                  style: TextStyle(fontSize: baseFontSize * 3),
                                 ),
                               ),
                               Container(

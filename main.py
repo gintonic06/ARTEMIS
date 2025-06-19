@@ -85,7 +85,22 @@ def calcular_vop(datos_json, altura_cm):
     Dfa = (0.249*altura + 30.7)/100
 
     vop = [(Dfa + Dhf - Dhb) / i for i in ptt_list if (Dfa + Dhf - Dhb) / i < 40]
-    return vop
+    
+    # Obtener tiempos de los picos braquiales
+    times_brachial = t[peaks_ba]
+
+    # Calcular diferencias entre tiempos consecutivos
+    rr_intervals = np.diff(times_brachial)  # en segundos
+
+    # Filtrar intervalos razonables (entre 0.3s y 1.0s por ejemplo)
+    valid_rr = rr_intervals[(rr_intervals > 0.4) & (rr_intervals < 1.0)]
+
+    # Calcular frecuencia de pulso promedio (Hz y bpm)
+    if len(valid_rr) > 0:
+        mean_rr = np.median(valid_rr)
+        freq_hz = 1 / mean_rr
+        freq_bpm = freq_hz * 60
+    return vop, freq_bpm
 
 
 
@@ -143,11 +158,12 @@ async def flutter_endpoint(websocket: WebSocket):
             elif message.lower() == "stop":
                 print("Recibido comando STOP. Procesando VOP...")
                 if altura and datos:
-                    vop_values = calcular_vop(datos, altura)
+                    vop_values, freq = calcular_vop(datos, altura)
                     datos = []
                     if vop_values:
                         mediana = np.median(vop_values)
                         await websocket.send_text(json.dumps({"vop": round(mediana, 2)}))
+                        await websocket.send_text(json.dumps({"freq": round(freq, 0)}))
                     else:
                         await websocket.send_text(json.dumps({"error": "No se pudo calcular la VOP"}))
                 else:
